@@ -8,16 +8,16 @@ Author: Tiago José M Silva
 
 import os
 import sys
+import re
 import traceback
 import io
 import contextlib
-from pathlib import Path
 
 from qgis.PyQt.QtCore import QTimer, QFileSystemWatcher, pyqtSignal, QObject, QSettings, QT_VERSION_STR
-from qgis.PyQt.QtWidgets import (QApplication, QAction, QMenu, QMessageBox, QDialog, QVBoxLayout, 
-                                QHBoxLayout, QListWidget, QListWidgetItem, QLabel, 
+from qgis.PyQt.QtWidgets import (QApplication, QAction, QMenu, QMessageBox, QDialog, QVBoxLayout,
+                                QHBoxLayout, QListWidget, QListWidgetItem, QLabel,
                                 QPushButton, QTextEdit, QSplitter, QWidget, QScrollArea,
-                                QTabWidget, QPlainTextEdit)
+                                QTabWidget, QPlainTextEdit, QToolButton)
 from qgis.PyQt.QtGui import QIcon, QFont, QTextCursor
 from qgis.PyQt.QtCore import Qt
 
@@ -59,142 +59,85 @@ class SafeScriptExecutor:
         
         return output, errors
     
+    RISKY_PATTERNS = [
+        (r'\bsubprocess\s*\.\s*call\b', 'subprocess.call'),
+        (r'\bsubprocess\s*\.\s*run\b', 'subprocess.run'),
+        (r'\bsubprocess\s*\.\s*Popen\b', 'subprocess.Popen'),
+        (r'\bos\s*\.\s*system\s*\(', 'os.system()'),
+        (r'(?<!\w)eval\s*\(', 'eval()'),
+        (r'(?<!\w)exec\s*\(', 'exec()'),
+        (r'\b__import__\s*\(', '__import__()'),
+    ]
+
     def validate_script_imports(self, script_content):
-        """Validate script imports for security"""
-        risky_imports = [
-            'subprocess.call',
-            'subprocess.run',
-            'subprocess.Popen',
-            'os.system',
-            'eval(',
-            'exec(',
-            '__import__',
-        ]
-        
-        warnings = []
-        for risky in risky_imports:
-            if risky in script_content:
-                warnings.append(f"⚠️ Potentially risky operation detected: {risky}")
-        
-        return warnings
+        """Check for risky patterns in non-comment lines."""
+        code = '\n'.join(l for l in script_content.split('\n') if not l.lstrip().startswith('#'))
+        return [f"⚠️ Potentially risky operation detected: {label}"
+                for pattern, label in self.RISKY_PATTERNS if re.search(pattern, code)]
     
     def prepare_safe_namespace(self, script_path):
-        """Prepare a safe execution namespace with necessary imports"""
-        script_globals = {
-            '__name__': '__main__',
-            '__file__': script_path,
-            'QT_VERSION': QT_VERSION,
+        """Prepare a safe execution namespace with common QGIS/Qt/stdlib imports."""
+        import json, math, datetime
+        from qgis.core import (
+            QgsProject, QgsVectorLayer, QgsRasterLayer, QgsMessageLog, Qgis,
+            QgsUnitTypes, QgsWkbTypes, QgsFeature, QgsGeometry,
+            QgsCoordinateReferenceSystem, QgsCoordinateTransform,
+            QgsMapLayerProxyModel, QgsProcessingContext
+        )
+        from qgis.gui import QgsMapCanvas, QgsMapTool
+        from qgis.utils import iface as qgis_iface
+        from qgis.PyQt.QtWidgets import (QMessageBox, QInputDialog, QFileDialog,
+                                         QProgressBar, QComboBox, QCheckBox)
+        from qgis.PyQt.QtCore import Qt, QTimer, QThread, pyqtSignal
+        from qgis.PyQt.QtGui import QIcon, QPixmap, QColor
+
+        return {
+            '__name__': '__main__', '__file__': script_path, 'QT_VERSION': QT_VERSION,
+            'QgsProject': QgsProject, 'QgsVectorLayer': QgsVectorLayer,
+            'QgsRasterLayer': QgsRasterLayer, 'QgsFeature': QgsFeature,
+            'QgsGeometry': QgsGeometry, 'QgsMessageLog': QgsMessageLog, 'Qgis': Qgis,
+            'QgsCoordinateReferenceSystem': QgsCoordinateReferenceSystem,
+            'QgsCoordinateTransform': QgsCoordinateTransform,
+            'QgsUnitTypes': QgsUnitTypes, 'QgsWkbTypes': QgsWkbTypes,
+            'QgsMapCanvas': QgsMapCanvas, 'QgsMapTool': QgsMapTool,
+            'QgsMapLayerProxyModel': QgsMapLayerProxyModel,
+            'QgsProcessingContext': QgsProcessingContext,
+            'iface': qgis_iface,
+            'QMessageBox': QMessageBox, 'QInputDialog': QInputDialog,
+            'QFileDialog': QFileDialog, 'QProgressBar': QProgressBar,
+            'QComboBox': QComboBox, 'QCheckBox': QCheckBox,
+            'Qt': Qt, 'QTimer': QTimer, 'QThread': QThread, 'pyqtSignal': pyqtSignal,
+            'QIcon': QIcon, 'QPixmap': QPixmap, 'QColor': QColor,
+            'json': json, 'math': math, 'datetime': datetime, 're': re,
         }
-        
-        try:
-            from qgis.core import (
-                QgsProject, QgsVectorLayer, QgsRasterLayer, QgsMessageLog, 
-                Qgis, QgsUnitTypes, QgsWkbTypes, QgsFeature, QgsGeometry,
-                QgsCoordinateReferenceSystem, QgsCoordinateTransform,
-                QgsMapLayerProxyModel, QgsProcessingContext
-            )
-            from qgis.gui import QgsMapCanvas, QgsMapTool
-            from qgis.utils import iface as qgis_iface
-            
-            script_globals.update({
-                'QgsProject': QgsProject,
-                'QgsVectorLayer': QgsVectorLayer,
-                'QgsRasterLayer': QgsRasterLayer,
-                'QgsFeature': QgsFeature,
-                'QgsGeometry': QgsGeometry,
-                'QgsCoordinateReferenceSystem': QgsCoordinateReferenceSystem,
-                'QgsCoordinateTransform': QgsCoordinateTransform,
-                'QgsMessageLog': QgsMessageLog,
-                'QgsUnitTypes': QgsUnitTypes,
-                'QgsWkbTypes': QgsWkbTypes,
-                'QgsMapCanvas': QgsMapCanvas,
-                'QgsMapTool': QgsMapTool,
-                'QgsMapLayerProxyModel': QgsMapLayerProxyModel,
-                'QgsProcessingContext': QgsProcessingContext,
-                'iface': qgis_iface,
-                'Qgis': Qgis,
-            })
-        except ImportError as e:
-            QgsMessageLog.logMessage(f"Warning: Some QGIS imports failed: {str(e)}", 
-                                   "Script Manager", Qgis.Warning)
-        
-        try:
-            from qgis.PyQt.QtWidgets import (QMessageBox, QInputDialog, QFileDialog, 
-                                           QProgressBar, QComboBox, QCheckBox)
-            from qgis.PyQt.QtCore import Qt, QTimer, QThread, pyqtSignal
-            from qgis.PyQt.QtGui import QIcon, QPixmap, QColor
-            
-            script_globals.update({
-                'QMessageBox': QMessageBox,
-                'QInputDialog': QInputDialog,
-                'QFileDialog': QFileDialog,
-                'QProgressBar': QProgressBar,
-                'QComboBox': QComboBox,
-                'QCheckBox': QCheckBox,
-                'Qt': Qt,
-                'QTimer': QTimer,
-                'QThread': QThread,
-                'pyqtSignal': pyqtSignal,
-                'QIcon': QIcon,
-                'QPixmap': QPixmap,
-                'QColor': QColor
-            })
-        except ImportError as e:
-            QgsMessageLog.logMessage(f"Warning: Some Qt imports failed: {str(e)}", 
-                                   "Script Manager", Qgis.Warning)
-        
-        try:
-            import json, math, datetime, re
-            script_globals.update({
-                'json': json,
-                'math': math,
-                'datetime': datetime,
-                're': re,
-            })
-        except ImportError as e:
-            QgsMessageLog.logMessage(f"Warning: Some standard library imports failed: {str(e)}", 
-                                   "Script Manager", Qgis.Warning)
-        
-        return script_globals
 
 
 class QtCompat:
-    """Qt compatibility helper for Qt5/Qt6 differences"""
-    
+    """Qt compatibility helper — resolves Qt5/Qt6 enum differences via lookup."""
+
+    _ENUMS = {
+        'user_role':        (Qt, 'ItemDataRole.UserRole', 'UserRole'),
+        'horizontal':       (Qt, 'Orientation.Horizontal', 'Horizontal'),
+        'rich_text':        (Qt, 'TextFormat.RichText', 'RichText'),
+        'pointing_hand':    (Qt, 'CursorShape.PointingHandCursor', 'PointingHandCursor'),
+        'text_beside_icon': (Qt, 'ToolButtonStyle.ToolButtonTextBesideIcon', 'ToolButtonTextBesideIcon'),
+        'font_bold':        (QFont, 'Weight.Bold', 'Bold'),
+    }
+
     @staticmethod
-    def get_user_role():
+    def get(name):
+        obj, qt6_path, qt5_attr = QtCompat._ENUMS[name]
         if QT_VERSION == 6:
-            return Qt.ItemDataRole.UserRole
-        else:
-            return Qt.UserRole
-    
-    @staticmethod
-    def get_horizontal():
-        if QT_VERSION == 6:
-            return Qt.Orientation.Horizontal
-        else:
-            return Qt.Horizontal
-    
-    @staticmethod
-    def get_rich_text():
-        if QT_VERSION == 6:
-            return Qt.TextFormat.RichText
-        else:
-            return Qt.RichText
-    
-    @staticmethod
-    def get_font_weight_bold():
-        if QT_VERSION == 6:
-            return QFont.Weight.Bold
-        else:
-            return QFont.Bold
-    
+            # Resolve dotted path: e.g. Qt -> ItemDataRole -> UserRole
+            result = obj
+            for part in qt6_path.split('.'):
+                result = getattr(result, part)
+            return result
+        return getattr(obj, qt5_attr)
+
     @staticmethod
     def exec_dialog(dialog):
-        if QT_VERSION == 6:
-            return dialog.exec()
-        else:
-            return dialog.exec_()
+        return dialog.exec() if QT_VERSION == 6 else dialog.exec_()
 
 
 class Translator:
@@ -257,27 +200,20 @@ class Translator:
                 'no_scripts_warning': 'No scripts found in folder',
                 'error_opening_folder': 'Error opening folder',
                 'output_captured': 'Output captured from script',
-                'about_title': 'Script Manager v1.0',
+                'about_title': 'Script Manager v2.0',
                 'about_subtitle': 'PyQGIS Script Management Plugin',
-                'about_description': 'The Script Manager plugin provides an intuitive interface for organizing and executing PyQGIS scripts within QGIS.',
-                'key_features': 'Key Features:',
-                'feature_browser': 'Script Browser with output capture and detailed error reporting',
-                'feature_quick': 'Quick Access menu with hover tooltips for fast script execution',
-                'feature_monitor': 'Auto-monitoring: Automatically detects new scripts and file changes',
-                'feature_management': 'Easy Management: Direct access to scripts folder and reload functionality',
-                'feature_safety': 'Safe Execution: Script validation and error handling',
-                'feature_output_capture': 'Output Capture: All print statements are captured and displayed',
-                'feature_crash_prevention': 'Crash Prevention: Safe execution environment with error handling',
-                'feature_script_validation': 'Script Validation: Pre-execution checks for security',
-                'scripts_location': 'Scripts Location:',
-                'currently_loaded': 'Currently loaded:',
-                'getting_started': 'Getting Started:',
-                'getting_started_1': '1. Click "Script Browser" to explore available scripts',
-                'getting_started_2': '2. Use "Quick Access" for fast script execution',
-                'getting_started_3': '3. Place your .py files in the scripts folder',
-                'getting_started_4': '4. Use "Reload Scripts" to refresh the list',
-                'getting_started_5': '5. Use print() statements in your scripts for output capture',
-                'script_format': 'Script Format Example:',
+                'about_description': 'A robust environment for managing, executing, and debugging PyQGIS scripts within QGIS.',
+                'about_features': 'Features',
+                'about_feature_1': 'Script Browser with integrated console and output capture',
+                'about_feature_2': 'Customizable toolbar with favorite script buttons',
+                'about_feature_3': 'Safe execution with pre-validation and error handling',
+                'about_feature_4': 'Automatic file monitoring and instant reloading',
+                'about_feature_5': 'Full Qt5/Qt6 compatibility',
+                'about_scripts_loaded': 'Scripts loaded',
+                'about_scripts_folder': 'Scripts folder',
+                'about_docstring_ref': 'Docstring Reference',
+                'about_author': 'Author',
+                'about_original': 'Based on',
                 'error': 'Error',
                 'script_error': 'Script Error',
                 'validation_warnings': 'Script Validation Warnings',
@@ -285,7 +221,10 @@ class Translator:
                 'tooltip_browser': 'Open browser with detailed script descriptions and output capture',
                 'tooltip_reload': 'Reload all scripts from folder',
                 'tooltip_folder': 'Open the folder where scripts are stored',
-                'tooltip_about': 'Information about Script Manager'
+                'tooltip_about': 'Information about Script Manager',
+                'toolbar_script_manager': 'Script Manager',
+                'toolbar_reload': 'R',
+                'toolbar_open_folder': 'F',
             },
             
             'pt_BR': {
@@ -320,27 +259,20 @@ class Translator:
                 'no_scripts_warning': 'Nenhum script encontrado na pasta',
                 'error_opening_folder': 'Erro ao abrir pasta',
                 'output_captured': 'Saída capturada do script',
-                'about_title': 'Gerenciador de Scripts v1.0',
+                'about_title': 'Gerenciador de Scripts v2.0',
                 'about_subtitle': 'Plugin de Gerenciamento de Scripts PyQGIS',
-                'about_description': 'O plugin Gerenciador de Scripts fornece uma interface intuitiva para organizar e executar scripts PyQGIS dentro do QGIS.',
-                'key_features': 'Principais Recursos:',
-                'feature_browser': 'Navegador de Scripts com captura de saída e relatório detalhado de erros',
-                'feature_quick': 'Menu de Acesso Rápido com dicas ao passar o mouse para execução rápida',
-                'feature_monitor': 'Monitoramento Automático: Detecta automaticamente novos scripts e mudanças',
-                'feature_management': 'Gerenciamento Fácil: Acesso direto à pasta de scripts e funcionalidade de recarregamento',
-                'feature_safety': 'Execução Segura: Validação de script e tratamento de erros',
-                'feature_output_capture': 'Captura de Saída: Todas as mensagens print são capturadas e exibidas',
-                'feature_crash_prevention': 'Prevenção de Crashes: Ambiente de execução seguro com tratamento de erros',
-                'feature_script_validation': 'Validação de Scripts: Verificações pré-execução para segurança',
-                'scripts_location': 'Localização dos Scripts:',
-                'currently_loaded': 'Atualmente carregados:',
-                'getting_started': 'Como Começar:',
-                'getting_started_1': '1. Clique em "Navegador de Scripts" para explorar scripts disponíveis',
-                'getting_started_2': '2. Use "Acesso Rápido" para execução rápida de scripts',
-                'getting_started_3': '3. Coloque seus arquivos .py na pasta de scripts',
-                'getting_started_4': '4. Use "Recarregar Scripts" para atualizar a lista',
-                'getting_started_5': '5. Use comandos print() nos seus scripts para captura de saída',
-                'script_format': 'Exemplo de Formato de Script:',
+                'about_description': 'Um ambiente robusto para gerenciar, executar e depurar scripts PyQGIS dentro do QGIS.',
+                'about_features': 'Recursos',
+                'about_feature_1': 'Navegador de Scripts com console integrado e captura de saída',
+                'about_feature_2': 'Barra de ferramentas personalizável com botões de scripts favoritos',
+                'about_feature_3': 'Execução segura com pré-validação e tratamento de erros',
+                'about_feature_4': 'Monitoramento automático de arquivos e recarregamento instantâneo',
+                'about_feature_5': 'Compatibilidade completa com Qt5/Qt6',
+                'about_scripts_loaded': 'Scripts carregados',
+                'about_scripts_folder': 'Pasta de scripts',
+                'about_docstring_ref': 'Referência do Docstring',
+                'about_author': 'Autor',
+                'about_original': 'Baseado em',
                 'error': 'Erro',
                 'script_error': 'Erro no Script',
                 'validation_warnings': 'Avisos de Validação do Script',
@@ -348,7 +280,10 @@ class Translator:
                 'tooltip_browser': 'Abrir navegador com descrições detalhadas dos scripts e captura de saída',
                 'tooltip_reload': 'Recarregar todos os scripts da pasta',
                 'tooltip_folder': 'Abrir a pasta onde os scripts são armazenados',
-                'tooltip_about': 'Informações sobre o Gerenciador de Scripts'
+                'tooltip_about': 'Informações sobre o Gerenciador de Scripts',
+                'toolbar_script_manager': 'Gerenciador de Scripts',
+                'toolbar_reload': 'R',
+                'toolbar_open_folder': 'F',
             }
         }
     
@@ -400,215 +335,201 @@ class ScriptWatcher(QObject):
 
 
 class ScriptBrowserDialog(QDialog):
-    """Enhanced script browser with output capture and error handling"""
-    
-    def __init__(self, scripts_info, execute_callback, parent=None):
+    """Professional script browser with output capture and error handling."""
+
+    # Centralized stylesheets
+    _CSS = {
+        'description': """QTextEdit {
+            background-color: #f8f9fa; border: 1px solid #dee2e6;
+            border-radius: 4px; padding: 8px; font-size: 11px; }""",
+        'console': """QPlainTextEdit {
+            background-color: #1e1e1e; color: #d4d4d4;
+            font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+            font-size: 10px; border: 1px solid #444; border-radius: 4px;
+            padding: 6px; selection-background-color: #264f78; }""",
+        'run_btn': """QPushButton {
+            background-color: #28a745; color: white; border: none;
+            padding: 8px 16px; border-radius: 4px; font-weight: bold; }
+            QPushButton:hover { background-color: #218838; }
+            QPushButton:disabled { background-color: #6c757d; }""",
+        'path': "color: #888; font-size: 10px; font-family: monospace;",
+        'header_title': "color: #2E86AB; font-size: 14px; font-weight: bold;",
+        'header_count': "color: #888; font-style: italic;",
+        'script_name': "color: #2E86AB; margin-bottom: 4px;",
+        'script_file': "color: #888; font-size: 10px; margin-bottom: 2px;",
+        'action_btn': """QPushButton {
+            background-color: #f0f0f0; border: 1px solid #ccc;
+            border-radius: 3px; padding: 5px 12px; }
+            QPushButton:hover { background-color: #e0e0e0; }""",
+        'close_btn': """QPushButton {
+            background-color: #dc3545; color: white; border: none;
+            border-radius: 3px; padding: 5px 16px; font-weight: bold; }
+            QPushButton:hover { background-color: #c82333; }""",
+    }
+
+    def __init__(self, scripts_info, execute_callback, reload_callback=None, parent=None):
         super().__init__(parent)
         self.scripts_info = scripts_info
         self.execute_callback = execute_callback
+        self.reload_callback = reload_callback
         self.current_script = None
-        self.executor = SafeScriptExecutor()
-        self.setup_ui()
-    
-    def setup_ui(self):
-        self.setWindowTitle(f"📋 {tr('script_browser')}")
+        self._setup_ui()
+
+    def _setup_ui(self):
+        self.setWindowTitle(tr('script_browser'))
         self.setModal(False)
-        self.resize(900, 600)
-        
-        layout = QVBoxLayout()
-        
-        header_layout = QHBoxLayout()
-        header_layout.setSpacing(8)
-        header_layout.setContentsMargins(0, 5, 0, 5)
-        
-        title = QLabel(f"📚 {tr('available_scripts')}")
-        title.setFont(QFont("", 11, QtCompat.get_font_weight_bold()))
-        title.setStyleSheet("color: #2E86AB; margin: 0px; padding: 0px;")
-        
-        count_label = QLabel(f"({len(self.scripts_info)} {tr('scripts_found')})")
-        count_label.setStyleSheet("color: #666; font-style: italic; margin: 0px; padding: 0px;")
-        
-        header_layout.addWidget(title)
-        header_layout.addWidget(count_label)
-        header_layout.addStretch()
-        
+        self.resize(920, 580)
+        self.setMinimumSize(640, 400)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(8, 6, 8, 6)
+        root.setSpacing(4)
+
+        # --- Header (compact, fixed height) ---
         header_widget = QWidget()
-        header_widget.setLayout(header_layout)
-        header_widget.setMaximumHeight(30)
-        
-        layout.addWidget(header_widget)
-        
-        splitter = QSplitter(QtCompat.get_horizontal())
-        
-        # Left panel - Script list
-        list_widget = QWidget()
-        list_layout = QVBoxLayout()
-        
-        list_label = QLabel(f"{tr('scripts')}:")
-        list_label.setFont(QFont("", 9, QtCompat.get_font_weight_bold()))
-        list_layout.addWidget(list_label)
-        
+        header_widget.setFixedHeight(28)
+        header = QHBoxLayout(header_widget)
+        header.setContentsMargins(2, 0, 2, 0)
+        header.setSpacing(8)
+        title = QLabel(tr('available_scripts'))
+        title.setStyleSheet(self._CSS['header_title'])
+        self.count_label = QLabel(f"({len(self.scripts_info)} {tr('scripts_found')})")
+        self.count_label.setStyleSheet(self._CSS['header_count'])
+        header.addWidget(title)
+        header.addWidget(self.count_label)
+        header.addStretch()
+        root.addWidget(header_widget)
+
+        # --- Splitter: List | Details ---
+        splitter = QSplitter(QtCompat.get('horizontal'))
+
+        # Left: script list
         self.script_list = QListWidget()
-        self.script_list.setMaximumWidth(280)
-        
-        for filename, script_info in sorted(self.scripts_info.items()):
-            item = QListWidgetItem(f"📄 {script_info['name']}")
-            item.setData(QtCompat.get_user_role(), (filename, script_info))
-            self.script_list.addItem(item)
-        
-        self.script_list.currentItemChanged.connect(self.on_script_selected)
-        list_layout.addWidget(self.script_list)
-        list_widget.setLayout(list_layout)
-        splitter.addWidget(list_widget)
-        
-        # Right panel - Script details with tabs
-        details_widget = QWidget()
-        details_layout = QVBoxLayout()
-        
+        self.script_list.setStyleSheet("""QListWidget::item { padding: 4px 6px; }
+            QListWidget::item:selected { background-color: #2E86AB; color: white; }""")
+        self._populate_list()
+        self.script_list.currentItemChanged.connect(self._on_script_selected)
+        splitter.addWidget(self.script_list)
+
+        # Right: details panel
+        right = QWidget()
+        details = QVBoxLayout(right)
+        details.setContentsMargins(8, 0, 0, 0)
+        details.setSpacing(4)
+
         self.script_name = QLabel(tr('select_script'))
-        self.script_name.setFont(QFont("", 12, QtCompat.get_font_weight_bold()))
-        self.script_name.setStyleSheet("color: #2E86AB; margin-bottom: 10px;")
-        
+        self.script_name.setFont(QFont("", 12, QtCompat.get('font_bold')))
+        self.script_name.setStyleSheet(self._CSS['script_name'])
+
         self.script_filename = QLabel("")
-        self.script_filename.setStyleSheet("color: #666; font-size: 10px; margin-bottom: 5px;")
-        
-        details_layout.addWidget(self.script_name)
-        details_layout.addWidget(self.script_filename)
-        
+        self.script_filename.setStyleSheet(self._CSS['script_file'])
+
+        details.addWidget(self.script_name)
+        details.addWidget(self.script_filename)
+
+        # Tabs
         self.tab_widget = QTabWidget()
-        
-        # Description tab
-        desc_tab = QWidget()
-        desc_layout = QVBoxLayout()
-        
-        desc_label = QLabel(f"{tr('description')}:")
-        desc_label.setFont(QFont("", 9, QtCompat.get_font_weight_bold()))
-        
+        self.tab_widget.addTab(self._build_desc_tab(), tr('description').rstrip(':'))
+        self.tab_widget.addTab(self._build_output_tab(), tr('output'))
+        details.addWidget(self.tab_widget)
+
+        splitter.addWidget(right)
+        splitter.setSizes([260, 640])
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
+        root.addWidget(splitter, 1)
+
+        # --- Bottom action bar (all buttons on one line) ---
+        self.run_button = QPushButton(tr('execute_script'))
+        self.run_button.setEnabled(False)
+        self.run_button.clicked.connect(self._run_selected_script)
+        self.run_button.setStyleSheet(self._CSS['run_btn'])
+        root.addLayout(self._build_action_bar())
+
+        if self.script_list.count() > 0:
+            self.script_list.setCurrentRow(0)
+
+    def _build_desc_tab(self):
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(6, 6, 6, 6)
+
         self.script_description = QTextEdit()
         self.script_description.setReadOnly(True)
         self.script_description.setMaximumHeight(120)
-        self.script_description.setStyleSheet("""
-            QTextEdit {
-                background-color: #f8f9fa;
-                border: 1px solid #dee2e6;
-                border-radius: 4px;
-                padding: 8px;
-                font-size: 11px;
-            }
-        """)
-        
-        path_label = QLabel(f"{tr('location')}:")
-        path_label.setFont(QFont("", 9, QtCompat.get_font_weight_bold()))
-        
+        self.script_description.setStyleSheet(self._CSS['description'])
+
         self.script_path = QLabel("")
         self.script_path.setWordWrap(True)
-        self.script_path.setStyleSheet("color: #666; font-size: 10px; font-family: monospace;")
-        
-        desc_layout.addWidget(desc_label)
-        desc_layout.addWidget(self.script_description)
-        desc_layout.addWidget(path_label)
-        desc_layout.addWidget(self.script_path)
-        desc_layout.addStretch()
-        
-        desc_tab.setLayout(desc_layout)
-        self.tab_widget.addTab(desc_tab, f"📝 {tr('description')}")
-        
-        # Output tab
-        output_tab = QWidget()
-        output_layout = QVBoxLayout()
-        
-        output_controls = QHBoxLayout()
-        
-        clear_output_btn = QPushButton(f"🗑️ {tr('clear_output')}")
-        clear_output_btn.clicked.connect(self.clear_output)
-        clear_output_btn.setMaximumWidth(120)
-        
-        output_controls.addWidget(QLabel(f"{tr('console_output')}:"))
-        output_controls.addStretch()
-        output_controls.addWidget(clear_output_btn)
-        
-        output_layout.addLayout(output_controls)
-        
+        self.script_path.setStyleSheet(self._CSS['path'])
+
+        layout.addWidget(QLabel(tr('description')))
+        layout.addWidget(self.script_description)
+        layout.addWidget(QLabel(tr('location')))
+        layout.addWidget(self.script_path)
+        layout.addStretch()
+        return tab
+
+    def _build_output_tab(self):
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(6, 6, 6, 6)
+
+        controls = QHBoxLayout()
+        controls.addWidget(QLabel(tr('console_output')))
+        controls.addStretch()
+        clear_btn = QPushButton(tr('clear_output'))
+        clear_btn.clicked.connect(self.clear_output)
+        clear_btn.setMaximumWidth(100)
+        controls.addWidget(clear_btn)
+        layout.addLayout(controls)
+
         self.output_text = QPlainTextEdit()
         self.output_text.setReadOnly(True)
-        self.output_text.setStyleSheet("""
-            QPlainTextEdit {
-                background-color: #1e1e1e;
-                color: #ffffff;
-                font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
-                font-size: 10px;
-                border: 1px solid #555;
-                border-radius: 4px;
-            }
-        """)
+        self.output_text.setStyleSheet(self._CSS['console'])
         self.output_text.setPlainText("Console output will appear here after script execution...")
-        
-        output_layout.addWidget(self.output_text)
-        output_tab.setLayout(output_layout)
-        self.tab_widget.addTab(output_tab, f"📺 {tr('output')}")
-        
-        details_layout.addWidget(self.tab_widget)
-        
-        self.run_button = QPushButton(f"▶️ {tr('execute_script')}")
-        self.run_button.setEnabled(False)
-        self.run_button.clicked.connect(self.run_selected_script)
-        self.run_button.setStyleSheet("""
-            QPushButton {
-                background-color: #28a745;
-                color: white;
-                border: none;
-                padding: 8px 16px;
-                border-radius: 4px;
-                font-weight: bold;
-            }
-            QPushButton:hover {
-                background-color: #218838;
-            }
-            QPushButton:disabled {
-                background-color: #6c757d;
-            }
-        """)
-        
-        details_layout.addWidget(self.run_button)
-        
-        details_widget.setLayout(details_layout)
-        splitter.addWidget(details_widget)
-        
-        splitter.setSizes([280, 620])
-        layout.addWidget(splitter)
-        
-        # Bottom button panel
-        button_layout = QHBoxLayout()
-        
-        refresh_btn = QPushButton(f"🔄 {tr('refresh_list')}")
-        refresh_btn.clicked.connect(self.refresh_scripts)
-        
-        open_folder_btn = QPushButton(f"📁 {tr('open_folder')}")
-        open_folder_btn.clicked.connect(self.open_scripts_folder)
-        
-        close_btn = QPushButton(f"❌ {tr('close')}")
+        layout.addWidget(self.output_text)
+        return tab
+
+    def _build_action_bar(self):
+        bar = QHBoxLayout()
+        bar.setSpacing(6)
+
+        for text, callback in [
+            (tr('refresh_list'), self.refresh_scripts),
+            (tr('open_folder'), self.open_scripts_folder),
+        ]:
+            btn = QPushButton(text)
+            btn.setStyleSheet(self._CSS['action_btn'])
+            btn.clicked.connect(callback)
+            bar.addWidget(btn)
+
+        bar.addStretch()
+        bar.addWidget(self.run_button)
+
+        close_btn = QPushButton(tr('close'))
+        close_btn.setStyleSheet(self._CSS['close_btn'])
         close_btn.clicked.connect(self.accept)
-        
-        button_layout.addWidget(refresh_btn)
-        button_layout.addWidget(open_folder_btn)
-        button_layout.addStretch()
-        button_layout.addWidget(close_btn)
-        
-        layout.addLayout(button_layout)
-        self.setLayout(layout)
-        
-        if self.script_list.count() > 0:
-            self.script_list.setCurrentRow(0)
-    
-    def on_script_selected(self, current, previous):
+        bar.addWidget(close_btn)
+        return bar
+
+    def _populate_list(self):
+        """Fill the script list from scripts_info."""
+        self.script_list.clear()
+        for filename, info in sorted(self.scripts_info.items()):
+            item = QListWidgetItem(info['name'])
+            item.setData(QtCompat.get('user_role'), (filename, info))
+            self.script_list.addItem(item)
+
+    def _on_script_selected(self, current, previous):
         if current:
-            filename, script_info = current.data(QtCompat.get_user_role())
-            self.script_name.setText(script_info['name'])
-            self.script_filename.setText(f"{tr('file')}: {filename}")
-            self.script_description.setText(script_info['description'])
-            self.script_path.setText(script_info['path'])
+            filename, info = current.data(QtCompat.get('user_role'))
+            self.script_name.setText(info['name'])
+            self.script_filename.setText(f"{tr('file')} {filename}")
+            self.script_description.setText(info['description'])
+            self.script_path.setText(info['path'])
             self.run_button.setEnabled(True)
-            self.current_script = script_info
+            self.current_script = info
         else:
             self.script_name.setText(tr('no_script_selected'))
             self.script_filename.setText("")
@@ -616,133 +537,105 @@ class ScriptBrowserDialog(QDialog):
             self.script_path.setText("")
             self.run_button.setEnabled(False)
             self.current_script = None
-    
-    def run_selected_script(self):
+
+    def _run_selected_script(self):
         if not self.current_script:
             return
-        
+
         self.tab_widget.setCurrentIndex(1)
         self.clear_output()
-        
-        self.append_output(f"🚀 Executing: {self.current_script['name']}")
-        self.append_output(f"📁 Path: {self.current_script['path']}")
+        name, path = self.current_script['name'], self.current_script['path']
+
+        self.append_output(f"Executing: {name}")
+        self.append_output(f"Path: {path}")
         self.append_output("=" * 60)
-        
+
         try:
-            success, output, errors, warnings = self.execute_callback(
-                self.current_script['path'], 
-                capture_output=True
-            )
-            
+            success, output, errors, warnings = self.execute_callback(path, capture_output=True)
+
             if output:
-                self.append_output("📤 Script Output:")
+                self.append_output("--- Output ---")
                 self.append_output(output)
-                self.append_output("-" * 40)
-            
             if errors:
-                self.append_output("❌ Script Errors:")
+                self.append_output("--- Errors ---")
                 self.append_output(errors, is_error=True)
-                self.append_output("-" * 40)
-            
             if warnings:
-                self.append_output("⚠️ Validation Warnings:")
-                for warning in warnings:
-                    self.append_output(warning, is_warning=True)
-                self.append_output("-" * 40)
-            
+                self.append_output("--- Warnings ---")
+                for w in warnings:
+                    self.append_output(w, is_warning=True)
+
             if success:
-                if warnings:
-                    self.append_output("✅ Script executed successfully with warnings!")
-                    iface.messageBar().pushMessage(
-                        tr('script_manager'), 
-                        f"⚠️ {tr('script_executed_warnings')}: '{self.current_script['name']}'",
-                        level=1, duration=3
-                    )
-                else:
-                    self.append_output("✅ Script executed successfully!")
-                    iface.messageBar().pushMessage(
-                        tr('script_manager'), 
-                        f"✅ {tr('script_executed').replace('!', '')} '{self.current_script['name']}'!",
-                        level=3, duration=3
-                    )
+                msg = tr('script_executed_warnings') if warnings else tr('script_executed')
+                self.append_output(f"OK: {msg}")
+                show_status_message(f"{msg}: '{name}'", 3000)
             else:
-                self.append_output("❌ Script execution failed!")
-                
+                self.append_output("FAILED: Script execution failed!")
+
         except Exception as e:
-            self.append_output(f"💥 Critical Error: {str(e)}", is_error=True)
-            QMessageBox.critical(
-                self, tr('error'), f"{tr('error_executing')}:\n\n{str(e)}"
-            )
-    
+            self.append_output(f"CRITICAL: {str(e)}", is_error=True)
+            QMessageBox.critical(self, tr('error'), f"{tr('error_executing')}:\n\n{str(e)}")
+
     def append_output(self, text, is_error=False, is_warning=False):
-        cursor = self.output_text.textCursor()
-        cursor.movePosition(QTextCursor.End)
-        
         from datetime import datetime
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        
-        if is_error:
-            formatted_text = f"[{timestamp}] ❌ {text}"
-        elif is_warning:
-            formatted_text = f"[{timestamp}] ⚠️  {text}"
-        else:
-            formatted_text = f"[{timestamp}] {text}"
-        
-        cursor.insertText(formatted_text + "\n")
-        self.output_text.setTextCursor(cursor)
-        
+        ts = datetime.now().strftime("%H:%M:%S")
+        prefix = "ERR" if is_error else ("WRN" if is_warning else "   ")
+        self.output_text.appendPlainText(f"[{ts}] {prefix} {text}")
         scrollbar = self.output_text.verticalScrollBar()
         scrollbar.setValue(scrollbar.maximum())
-        
         QApplication.processEvents()
-    
+
     def clear_output(self):
         self.output_text.clear()
-        self.append_output("Console ready for script execution...")
-    
+        self.append_output("Console ready.")
+
     def refresh_scripts(self):
-        self.accept()
-    
+        if not self.reload_callback:
+            return
+        self.scripts_info = self.reload_callback()
+
+        # Remember selection
+        current = self.script_list.currentItem()
+        prev_filename = current.data(QtCompat.get('user_role'))[0] if current else None
+
+        self._populate_list()
+        self.count_label.setText(f"({len(self.scripts_info)} {tr('scripts_found')})")
+
+        # Restore selection
+        if prev_filename:
+            for i in range(self.script_list.count()):
+                if self.script_list.item(i).data(QtCompat.get('user_role'))[0] == prev_filename:
+                    self.script_list.setCurrentRow(i)
+                    return
+        if self.script_list.count() > 0:
+            self.script_list.setCurrentRow(0)
+
     def open_scripts_folder(self):
-        import subprocess
-        import platform
-        
-        try:
-            scripts_dir = os.path.dirname(self.current_script['path']) if self.current_script else ""
-            if scripts_dir and os.path.exists(scripts_dir):
-                if platform.system() == "Windows":
-                    os.startfile(scripts_dir)
-                elif platform.system() == "Darwin":
-                    subprocess.run(["open", scripts_dir])
-                else:
-                    subprocess.run(["xdg-open", scripts_dir])
-        except Exception as e:
-            QMessageBox.information(self, tr('open_scripts_folder'), f"{tr('error_opening_folder')}: {str(e)}")
+        if self.current_script:
+            open_folder(os.path.dirname(self.current_script['path']))
 
 
 def show_status_message(message, timeout=3000, is_warning=False):
-    """Display a temporary message in the QGIS status bar"""
+    """Display a temporary message in the QGIS status bar."""
     try:
-        status_bar = iface.mainWindow().statusBar()
-        
-        if is_warning:
-            status_bar.setStyleSheet("QStatusBar { background-color: #FFF3CD; color: #856404; }")
-        else:
-            status_bar.setStyleSheet("QStatusBar { background-color: #D4EDDA; color: #155724; }")
-        
-        status_bar.showMessage(message, timeout)
-        
-        def restore_style():
-            status_bar.setStyleSheet("")
-        
-        QTimer.singleShot(timeout, restore_style)
-        
+        iface.mainWindow().statusBar().showMessage(message, timeout)
     except Exception:
-        iface.messageBar().pushMessage(
-            tr('script_manager'), message, 
-            level=1 if is_warning else 0,
-            duration=timeout // 1000
-        )
+        pass
+
+
+def open_folder(path):
+    """Open a folder in the OS file manager."""
+    import subprocess, platform
+    try:
+        system = platform.system()
+        if system == "Windows":
+            os.startfile(path)
+        elif system == "Darwin":
+            subprocess.run(["open", path])
+        else:
+            subprocess.run(["xdg-open", path])
+    except Exception as e:
+        QMessageBox.information(None, tr('open_scripts_folder'),
+                               f"{tr('error_opening_folder')}: {str(e)}")
 
 
 class ScriptManager:
@@ -758,10 +651,13 @@ class ScriptManager:
             self.create_example_script()
         
         self.menu = None
-        self.actions = []
         self.scripts = {}
         self.browser_dialog = None
         self.executor = SafeScriptExecutor()
+        self.toolbar = None
+        self.toolbar_container = None
+        self.toolbar_script_buttons = []
+        self._validated_acknowledged = set()
         
         self.watcher = ScriptWatcher(self.scripts_dir)
         self.watcher.scripts_changed.connect(self.reload_scripts)
@@ -781,7 +677,8 @@ class ScriptManager:
             
             self.load_scripts()
             self.create_menu()
-            
+            self._create_toolbar()
+
         except Exception as e:
             QgsMessageLog.logMessage(f"Error initializing GUI: {str(e)}", 
                                    "Script Manager", Qgis.Critical)
@@ -795,11 +692,17 @@ class ScriptManager:
             if self.menu:
                 self.menu.clear()
                 self.iface.mainWindow().menuBar().removeAction(self.menu.menuAction())
-            self.actions.clear()
-            QgsMessageLog.logMessage("Script Manager unloaded successfully", 
+            if self.toolbar:
+                self.toolbar.clear()
+                self.iface.mainWindow().removeToolBar(self.toolbar)
+                self.toolbar = None
+            self.toolbar_container = None
+            self.toolbar_script_buttons.clear()
+
+            QgsMessageLog.logMessage("Script Manager unloaded successfully",
                                    "Script Manager", Qgis.Info)
         except Exception as e:
-            QgsMessageLog.logMessage(f"Error during unload: {str(e)}", 
+            QgsMessageLog.logMessage(f"Error during unload: {str(e)}",
                                    "Script Manager", Qgis.Warning)
     
     def create_example_script(self):
@@ -948,56 +851,55 @@ if __name__ == "__main__":
         QgsMessageLog.logMessage(f"Loaded {loaded_count} scripts, {error_count} errors", 
                                "Script Manager", Qgis.Info)
     
+    @staticmethod
+    def _parse_docstring_field(content, field, as_bool=False):
+        """Extract a field value from a script's docstring. Returns match or None/False."""
+        pattern = r'(?:"""|\'\'\')\s*[\s\S]*?' + field + r':\s*([^\n]+)'
+        match = re.search(pattern, content, re.IGNORECASE)
+        if not match:
+            return False if as_bool else None
+        if as_bool:
+            return match.group(1).strip().lower() in ('true', 'yes', '1')
+        return match.group(1).strip().replace('"', '').replace("'", "")
+
     def get_script_info(self, script_path):
         try:
             with open(script_path, 'r', encoding='utf-8') as f:
                 content = f.read()
-            
+
             try:
                 compile(content, script_path, 'exec')
             except SyntaxError as e:
-                QgsMessageLog.logMessage(f"Syntax error in {script_path}: {str(e)}", 
+                QgsMessageLog.logMessage(f"Syntax error in {script_path}: {str(e)}",
                                        "Script Manager", Qgis.Warning)
                 return None
-            
-            description = "PyQGIS Script"
-            
-            import re
-            
-            patterns = [
-                r'"""[\s\S]*?Description:\s*([^\n]+)',
-                r"'''[\s\S]*?Description:\s*([^\n]+)",
-                r'Description:\s*(.+)',
-                r'"""[\s\S]*?Descrição:\s*([^\n]+)',
-                r"'''[\s\S]*?Descrição:\s*([^\n]+)",
-                r'Descrição:\s*(.+)',
-                r'"""[\s\S]*?Descripción:\s*([^\n]+)',
-                r"'''[\s\S]*?Descripción:\s*([^\n]+)",
-                r'Descripción:\s*(.+)',
-            ]
-            
-            for pattern in patterns:
-                match = re.search(pattern, content, re.IGNORECASE)
-                if match:
-                    description = match.group(1).strip()
+
+            # Parse all docstring fields
+            desc_keys = ('Description', 'Descrição', 'Descripción')
+            description = None
+            for key in desc_keys:
+                description = self._parse_docstring_field(content, key)
+                if description:
                     break
-            
-            description = description.replace('"', '').replace("'", "").strip()
-            if not description:
-                description = "PyQGIS Script"
-            
+            description = description or "PyQGIS Script"
+
+            show_in_toolbar = self._parse_docstring_field(content, 'Toolbar', as_bool=True)
+            toolbar_label = self._parse_docstring_field(content, 'ToolbarLabel') if show_in_toolbar else None
+            is_validated = self._parse_docstring_field(content, 'Validated', as_bool=True)
+
             script_name = os.path.splitext(os.path.basename(script_path))[0]
-            display_name = script_name.replace('_', ' ').title()
-            
+
             return {
-                'name': display_name,
+                'name': script_name.replace('_', ' ').title(),
                 'path': script_path,
                 'description': description,
-                'content': content
+                'toolbar': show_in_toolbar,
+                'toolbar_label': toolbar_label,
+                'validated': is_validated,
             }
-        
+
         except Exception as e:
-            QgsMessageLog.logMessage(f"Error reading script {script_path}: {str(e)}", 
+            QgsMessageLog.logMessage(f"Error reading script {script_path}: {str(e)}",
                                    "Script Manager", Qgis.Warning)
             return None
     
@@ -1007,13 +909,13 @@ if __name__ == "__main__":
         
         try:
             self.menu.clear()
-            self.actions.clear()
+
             
             browser_action = QAction(f"🔍 {tr('script_browser')}", self.iface.mainWindow())
             browser_action.setToolTip(tr('tooltip_browser'))
             browser_action.triggered.connect(self.open_script_browser)
             self.menu.addAction(browser_action)
-            self.actions.append(browser_action)
+
             
             self.menu.addSeparator()
             
@@ -1021,7 +923,7 @@ if __name__ == "__main__":
                 no_scripts_action = QAction(f"❌ {tr('no_scripts_found')}", self.iface.mainWindow())
                 no_scripts_action.setEnabled(False)
                 self.menu.addAction(no_scripts_action)
-                self.actions.append(no_scripts_action)
+
             else:
                 quick_menu = self.menu.addMenu(f"⚡ {tr('quick_access')} ({len(self.scripts)} scripts)")
                 
@@ -1039,7 +941,7 @@ if __name__ == "__main__":
                     )
                     
                     quick_menu.addAction(action)
-                    self.actions.append(action)
+
                 
                 quick_menu.aboutToHide.connect(lambda: show_status_message("", 1))
             
@@ -1049,24 +951,111 @@ if __name__ == "__main__":
             reload_action.setToolTip(tr('tooltip_reload'))
             reload_action.triggered.connect(self.reload_scripts)
             self.menu.addAction(reload_action)
-            self.actions.append(reload_action)
+
             
             open_folder_action = QAction(f"📁 {tr('open_scripts_folder')}", self.iface.mainWindow())
             open_folder_action.setToolTip(tr('tooltip_folder'))
             open_folder_action.triggered.connect(self.open_scripts_folder)
             self.menu.addAction(open_folder_action)
-            self.actions.append(open_folder_action)
+
             
             info_action = QAction(f"ℹ️ {tr('about')}", self.iface.mainWindow())
             info_action.setToolTip(tr('tooltip_about'))
             info_action.triggered.connect(self.show_info)
             self.menu.addAction(info_action)
-            self.actions.append(info_action)
+
             
         except Exception as e:
             QgsMessageLog.logMessage(f"Error creating menu: {str(e)}", 
                                    "Script Manager", Qgis.Critical)
     
+    def _create_toolbar(self):
+        """Create the toolbar with script buttons, following QGISDualMapViewer pattern."""
+        icon_path = os.path.join(self.plugin_dir, "icon.png")
+
+        self.toolbar = self.iface.addToolBar(tr('toolbar_script_manager'))
+        self.toolbar.setObjectName("ScriptManagerToolbar")
+
+        self._populate_toolbar(icon_path)
+
+    def _populate_toolbar(self, icon_path=None):
+        """Populate (or repopulate) the toolbar container with current scripts."""
+        if icon_path is None:
+            icon_path = os.path.join(self.plugin_dir, "icon.png")
+
+        # Remove old container if rebuilding
+        if self.toolbar_container is not None:
+            self.toolbar.clear()
+            self.toolbar_container = None
+            self.toolbar_script_buttons.clear()
+
+        # Container widget with horizontal layout (DualViewer pattern)
+        self.toolbar_container = QWidget()
+        layout = QHBoxLayout(self.toolbar_container)
+        layout.setContentsMargins(3, 2, 3, 2)
+        layout.setSpacing(3)
+
+        self.toolbar_container.setStyleSheet("""
+            QWidget {
+                border: 1px solid #b0b0b0;
+                background: transparent;
+            }
+        """)
+
+        def add_btn(text, tooltip, callback, stylesheet=None, icon=None, style=None):
+            btn = QToolButton()
+            btn.setText(text)
+            btn.setToolTip(tooltip)
+            btn.setCursor(QtCompat.get('pointing_hand'))
+            if icon:
+                btn.setIcon(icon)
+            if style:
+                btn.setToolButtonStyle(style)
+            if stylesheet:
+                btn.setStyleSheet(stylesheet)
+            btn.clicked.connect(callback)
+            layout.addWidget(btn)
+            self.toolbar_script_buttons.append(btn)
+            return btn
+
+        SCRIPT_BTN_CSS = """
+            QToolButton { background-color: #d4edda; border: 1px solid #28a745;
+                          border-radius: 3px; padding: 2px 6px; }
+            QToolButton:hover { background-color: #b7dfbf; }
+            QToolButton:pressed { background-color: #a3d5ab; }
+        """
+
+        # Identity button
+        add_btn(tr('toolbar_script_manager'), tr('tooltip_browser'),
+                self.open_script_browser,
+                icon=QIcon(icon_path), style=QtCompat.get('text_beside_icon'))
+
+        # Dynamic script buttons (only scripts with Toolbar: true)
+        for filename, script_info in sorted(self.scripts.items()):
+            if not script_info.get('toolbar'):
+                continue
+            label = script_info.get('toolbar_label') or script_info['name']
+            if len(label) > 20:
+                label = label[:20] + "..."
+            path = script_info['path']
+            add_btn(label, f"{script_info['name']}: {script_info['description']}",
+                    lambda checked=False, p=path: self.execute_script(p, capture_output=False),
+                    stylesheet=SCRIPT_BTN_CSS)
+
+        # Utility buttons
+        add_btn(tr('toolbar_reload'), tr('tooltip_reload'), self.reload_scripts)
+        add_btn(tr('toolbar_open_folder'), tr('tooltip_folder'), self.open_scripts_folder)
+
+        # Add container to toolbar
+        self.toolbar.addWidget(self.toolbar_container)
+
+    def _reload_scripts_for_browser(self):
+        """Reload scripts and return updated dict. Used as callback for ScriptBrowserDialog."""
+        self.load_scripts()
+        self.create_menu()
+        self._populate_toolbar()
+        return self.scripts
+
     def open_script_browser(self):
         try:
             if not self.scripts:
@@ -1077,7 +1066,9 @@ if __name__ == "__main__":
                 self.browser_dialog.close()
             
             self.browser_dialog = ScriptBrowserDialog(
-                self.scripts, self.execute_script, self.iface.mainWindow()
+                self.scripts, self.execute_script,
+                reload_callback=self._reload_scripts_for_browser,
+                parent=self.iface.mainWindow()
             )
             self.browser_dialog.show()
             
@@ -1099,16 +1090,26 @@ if __name__ == "__main__":
                 script_content = f.read()
             
             validation_warnings = self.executor.validate_script_imports(script_content)
-            
+
             if validation_warnings and not capture_output:
-                warning_text = "\n".join(validation_warnings)
-                reply = QMessageBox.question(
-                    None, tr('validation_warnings'),
-                    f"{tr('validation_warnings')}:\n\n{warning_text}\n\nContinue execution?",
-                    QMessageBox.Yes | QMessageBox.No
-                )
-                if reply == QMessageBox.No:
-                    return False, "", "", validation_warnings
+                # Look up script info to check Validated flag
+                script_filename = os.path.basename(script_path)
+                script_info = self.scripts.get(script_filename, {})
+                is_validated = script_info.get('validated', False)
+
+                # Show warning if: not validated, OR validated but not yet acknowledged this session
+                if not is_validated or script_path not in self._validated_acknowledged:
+                    warning_text = "\n".join(validation_warnings)
+                    reply = QMessageBox.question(
+                        None, tr('validation_warnings'),
+                        f"{tr('validation_warnings')}:\n\n{warning_text}\n\nContinue execution?",
+                        QMessageBox.Yes | QMessageBox.No
+                    )
+                    if reply == QMessageBox.No:
+                        return False
+                    # Remember acknowledgement for validated scripts
+                    if is_validated:
+                        self._validated_acknowledged.add(script_path)
             
             script_globals = self.executor.prepare_safe_namespace(script_path)
             
@@ -1168,6 +1169,7 @@ if __name__ == "__main__":
         try:
             self.load_scripts()
             self.create_menu()
+            self._populate_toolbar()
             show_status_message(f"🔄 {tr('scripts_reloaded')} ({len(self.scripts)} scripts)", 2000)
             QgsMessageLog.logMessage("🔄 Scripts reloaded successfully", "Script Manager", Qgis.Info)
         except Exception as e:
@@ -1175,114 +1177,92 @@ if __name__ == "__main__":
                                    "Script Manager", Qgis.Critical)
     
     def open_scripts_folder(self):
-        import subprocess
-        import platform
-        
-        try:
-            if platform.system() == "Windows":
-                os.startfile(self.scripts_dir)
-            elif platform.system() == "Darwin":
-                subprocess.run(["open", self.scripts_dir])
-            else:
-                subprocess.run(["xdg-open", self.scripts_dir])
-                
-        except Exception as e:
-            QMessageBox.information(
-                None, tr('open_scripts_folder'), 
-                f"{tr('scripts_location')}:\n{self.scripts_dir}\n\n{tr('error_opening_folder')}: {str(e)}"
-            )
-    
+        open_folder(self.scripts_dir)
+
     def show_info(self):
-        lang = _translator.current_language
-        
+        icon_path = os.path.join(self.plugin_dir, "icon.png")
+        scripts_count = len(self.scripts)
+
         info_text = f"""
-<h3>📋 {tr('about_title')}</h3>
-<p><b>{tr('about_subtitle')}</b></p>
+<table cellpadding="6"><tr>
+<td><img src="{icon_path}" width="48" height="48"></td>
+<td>
+<span style="font-size:16pt; font-weight:bold;">{tr('about_title')}</span><br>
+<span style="color:#666;">{tr('about_subtitle')}</span>
+</td>
+</tr></table>
+
+<hr>
+
 <p>{tr('about_description')}</p>
 
-<p><b>🎯 {tr('key_features')}:</b></p>
-<ul>
-<li><b>📚 {tr('script_browser')}:</b> {tr('feature_browser')}</li>
-<li><b>⚡ {tr('quick_access')}:</b> {tr('feature_quick')}</li>
-<li><b>🔄 Auto-monitoring:</b> {tr('feature_monitor')}</li>
-<li><b>🔧 Easy Management:</b> {tr('feature_management')}</li>
-<li><b>🖥️ Output Capture:</b> {tr('feature_output_capture')}</li>
-<li><b>🛡️ Safe Execution:</b> {tr('feature_crash_prevention')}</li>
-<li><b>⚠️ Script Validation:</b> {tr('feature_script_validation')}</li>
+<p><b>{tr('about_features')}</b></p>
+<ul style="margin-top:2px;">
+<li>{tr('about_feature_1')}</li>
+<li>{tr('about_feature_2')}</li>
+<li>{tr('about_feature_3')}</li>
+<li>{tr('about_feature_4')}</li>
+<li>{tr('about_feature_5')}</li>
 </ul>
 
-<p><b>📁 {tr('scripts_location')}:</b><br>
-<code>{self.scripts_dir}</code></p>
-<p><b>📊 {tr('currently_loaded')}:</b> {len(self.scripts)} script(s)</p>
+<hr>
 
-<p><b>🚀 {tr('getting_started')}:</b></p>
-<ul>
-<li>{tr('getting_started_1')}</li>
-<li>{tr('getting_started_2')}</li>
-<li>{tr('getting_started_3')}</li>
-<li>{tr('getting_started_4')}</li>
-<li>{tr('getting_started_5')}</li>
-</ul>
+<table cellpadding="2">
+<tr><td><b>{tr('about_scripts_loaded')}:</b></td><td>{scripts_count}</td></tr>
+<tr><td><b>{tr('about_scripts_folder')}:</b></td><td><code>{self.scripts_dir}</code></td></tr>
+</table>
 
-<p><b>📝 {tr('script_format')}:</b></p>
-<pre>
-# -*- coding: utf-8 -*-
-\"\"\"
-My Custom Script
-{'Descrição' if lang == 'pt_BR' else 'Description'}: This script does something useful
-\"\"\"
+<hr>
 
-from qgis.PyQt.QtWidgets import QMessageBox
-from qgis.core import QgsProject
+<p><b>{tr('about_docstring_ref')}</b></p>
+<pre style="background:#f5f5f5; padding:8px; border:1px solid #ddd;">
+Description:  What the script does
+Toolbar:      true
+ToolbarLabel: Short Name
+Validated:    true</pre>
 
-def main():
-    print("🚀 {'Iniciando script...' if lang == 'pt_BR' else 'Starting script...'}")
-    
-    project = QgsProject.instance()
-    layer_count = len(project.mapLayers())
-    
-    QMessageBox.information(
-        None, 
-        "Script Info", 
-        f"Project has {{layer_count}} layers"
-    )
-    
-    print("✅ {'Concluído!' if lang == 'pt_BR' else 'Completed!'}")
-        
-if __name__ == "__main__":
-    main()
-</pre>
-<p><i>For more information and examples, visit the plugin documentation.</i></p>
-        """
-    
-        dialog = QDialog()
+<hr>
+
+<p style="color:#888; font-size:9pt;">
+<b>{tr('about_author')}:</b> Thomas W&ouml;lk<br>
+<b>{tr('about_original')}:</b> Tiago Jos&eacute; M. Silva
+&nbsp;&middot;&nbsp;
+<a href="https://github.com/TiagoJoseMS/script-manager">GitHub</a>
+&nbsp;&middot;&nbsp;
+<a href="https://github.com/TiagoJoseMS/script-manager/issues">Issues</a>
+</p>
+"""
+
+        dialog = QDialog(self.iface.mainWindow())
         dialog.setWindowTitle(tr('about'))
-        dialog.resize(650, 550)
-        dialog.setMinimumSize(650, 550)
-        
+        dialog.resize(520, 480)
+        dialog.setMinimumSize(420, 380)
+
         layout = QVBoxLayout()
-        
+        layout.setContentsMargins(16, 16, 16, 12)
+
         label = QLabel(info_text)
-        label.setTextFormat(QtCompat.get_rich_text())
+        label.setTextFormat(QtCompat.get('rich_text'))
         label.setWordWrap(True)
-        
+        label.setOpenExternalLinks(True)
+
         scroll = QScrollArea()
         scroll.setWidget(label)
         scroll.setWidgetResizable(True)
-        
+        scroll.setFrameShape(QScrollArea.NoFrame if hasattr(QScrollArea, 'NoFrame') else 0)
+
         ok_button = QPushButton("OK")
         ok_button.setFixedSize(80, 30)
         ok_button.clicked.connect(dialog.accept)
-        
+
         button_layout = QHBoxLayout()
         button_layout.addStretch()
         button_layout.addWidget(ok_button)
-        button_layout.addStretch()
-        
+
         layout.addWidget(scroll)
         layout.addLayout(button_layout)
         dialog.setLayout(layout)
-        
+
         QtCompat.exec_dialog(dialog)
 
 

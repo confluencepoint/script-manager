@@ -3,40 +3,51 @@ name=Script Manager
 qgisMinimumVersion=3.0
 qgisMaximumVersion=4.99
 supportsQt6=True
-description=A PyQGIS script manager for safe execution, debugging, and automation. Features a visual browser with an integrated output console, automatic file monitoring, script validation, and full Qt5/Qt6 support.
-version=1.0
-author=Tiago José M. Silva
-email=tiago.moraessilva@hotmail.com
+description=A PyQGIS script manager for safe execution, debugging, and automation. Features a visual browser with an integrated output console, a customizable toolbar for quick script access, automatic file monitoring, script validation, and full Qt5/Qt6 support.
+version=2.0
+author=Thomas Wölk (based on Tiago José M. Silva)
+email=confluencepoint@pm.me
 
-about=Script Manager provides a robust environment for managing, executing, and debugging PyQGIS scripts. Its core features include: a visual script browser with an integrated console to capture print() statements and errors in real-time; a safe execution environment that prevents script failures from crashing QGIS; pre-execution validation to warn against risky code; automatic file monitoring for instant reloading; and a quick access menu for routine tasks. With full Qt5/Qt6 compatibility and multi-language support (EN, PT-BR), it streamlines the development workflow for GIS professionals and developers.
+about=Script Manager provides a robust environment for managing, executing, and debugging PyQGIS scripts. Key features: visual script browser with integrated console for real-time output capture; customizable toolbar for one-click script execution (Toolbar: true in docstring); safe execution with regex-based pre-validation; automatic file monitoring and instant reloading; docstring-driven configuration (Description, Toolbar, ToolbarLabel, Validated); data-driven Qt5/Qt6 compatibility layer. Fork of github.com/TiagoJoseMS/script-manager — extensively reworked and extended.
 
-tracker=https://github.com/TiagoJoseMS/script-manager/issues
-repository=https://github.com/TiagoJoseMS/script-manager
-homepage=https://github.com/TiagoJoseMS/script-manager
+tracker=https://github.com/confluencepoint/script-manager/issues
+repository=https://github.com/confluencepoint/script-manager
+homepage=https://github.com/confluencepoint/script-manager
 
 icon=icon.png
 
 # Tags for plugin discovery
-tags=python,scripts,automation,pyqgis,debug,console,safe,security,validation,error handling,tools,productivity,management,browser,monitoring,multilingual,professional
+tags=python,scripts,automation,pyqgis,debug,console,safe,security,validation,error handling,tools,productivity,management,browser,monitoring,multilingual,professional,toolbar,favorites
 
 category=Scripts
 
 experimental=False
 deprecated=False
 
-# Changelog matching the README.md file
-changelog=Version 1.0 (Initial Release)
-    - ✅ Script browser with detailed information
-    - ✅ Quick access menu system
-    - ✅ Automatic file system monitoring
-    - ✅ Multi-language support (EN, PT-BR)
-    - ✅ Complete Qt5/Qt6 compatibility
-    - ✅ Professional user interface
-    - ✅ Comprehensive error handling
-    - ✅ Automatic script reloading
-    - ✅ Integrated help system
-    - ✅ Safe script execution environment
-    - ✅ Console output capture
+# Changelog
+changelog=Version 2.0 (Fork)
+    - Customizable toolbar with favorite script buttons (Toolbar: true)
+    - Custom toolbar button labels (ToolbarLabel:)
+    - Warning suppression for validated scripts (Validated: true)
+    - Professional script browser redesign
+    - Professional about dialog redesign
+    - Regex-based script validation (fewer false positives)
+    - Status bar messages (non-intrusive)
+    - Data-driven Qt5/Qt6 compatibility layer
+    - Comprehensive code refactoring (-30% LOC)
+    - Bilingual README (DE/EN)
+    Version 1.0 (Original by Tiago José M. Silva)
+    - Script browser with detailed information
+    - Quick access menu system
+    - Automatic file system monitoring
+    - Multi-language support (EN, PT-BR)
+    - Complete Qt5/Qt6 compatibility
+    - Professional user interface
+    - Comprehensive error handling
+    - Automatic script reloading
+    - Integrated help system
+    - Safe script execution environment
+    - Console output capture
 
 hasProcessingProvider=no
 

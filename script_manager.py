@@ -23,7 +23,7 @@ from qgis.PyQt.QtCore import Qt
 
 QT_VERSION = 6 if QT_VERSION_STR.startswith('6') else 5
 
-from qgis.core import QgsMessageLog, Qgis
+from qgis.core import QgsMessageLog, QgsApplication, Qgis
 from qgis.utils import iface
 
 
@@ -671,7 +671,7 @@ class ScriptManager:
         
     def initGui(self):
         try:
-            self.menu = QMenu(f"📋 {tr('script_manager')}", self.iface.mainWindow().menuBar())
+            self.menu = QMenu(tr('script_manager'), self.iface.mainWindow().menuBar())
             menubar = self.iface.mainWindow().menuBar()
             menubar.addMenu(self.menu)
             
@@ -903,63 +903,76 @@ if __name__ == "__main__":
                                    "Script Manager", Qgis.Warning)
             return None
     
+    def _icon(self, theme_name, fallback_standard=None):
+        """Get a QGIS theme icon, falling back to Qt standard icon."""
+        icon = QgsApplication.getThemeIcon(theme_name)
+        if not icon.isNull():
+            return icon
+        if fallback_standard is not None:
+            from qgis.PyQt.QtWidgets import QStyle
+            return QApplication.style().standardIcon(fallback_standard)
+        return QIcon()
+
     def create_menu(self):
         if not self.menu:
             return
-        
+
         try:
             self.menu.clear()
+            from qgis.PyQt.QtWidgets import QStyle
 
-            
-            browser_action = QAction(f"🔍 {tr('script_browser')}", self.iface.mainWindow())
+            browser_action = QAction(self._icon('/mActionShowAllLayers.svg', QStyle.SP_FileDialogContentsView),
+                                     tr('script_browser'), self.iface.mainWindow())
             browser_action.setToolTip(tr('tooltip_browser'))
             browser_action.triggered.connect(self.open_script_browser)
             self.menu.addAction(browser_action)
 
-            
             self.menu.addSeparator()
-            
+
             if not self.scripts:
-                no_scripts_action = QAction(f"❌ {tr('no_scripts_found')}", self.iface.mainWindow())
+                no_scripts_action = QAction(self._icon('/mIconWarning.svg', QStyle.SP_MessageBoxWarning),
+                                            tr('no_scripts_found'), self.iface.mainWindow())
                 no_scripts_action.setEnabled(False)
                 self.menu.addAction(no_scripts_action)
 
             else:
-                quick_menu = self.menu.addMenu(f"⚡ {tr('quick_access')} ({len(self.scripts)} scripts)")
-                
+                quick_menu = self.menu.addMenu(self._icon('/mActionStart.svg', QStyle.SP_MediaPlay),
+                                               f"{tr('quick_access')} ({len(self.scripts)} scripts)")
+
                 for filename, script_info in sorted(self.scripts.items()):
-                    action = QAction(script_info['name'], self.iface.mainWindow())
-                    
+                    action = QAction(self._icon('/mIconPythonFile.svg', QStyle.SP_FileIcon),
+                                     script_info['name'], self.iface.mainWindow())
+
                     action.hovered.connect(
-                        lambda desc=script_info['description'], name=script_info['name']: 
-                        show_status_message(f"💡 {name}: {desc}", 5000)
+                        lambda desc=script_info['description'], name=script_info['name']:
+                        show_status_message(f"{name}: {desc}", 5000)
                     )
-                    
+
                     action.triggered.connect(
-                        lambda checked, path=script_info['path']: 
+                        lambda checked, path=script_info['path']:
                         self.execute_script(path, capture_output=False)
                     )
-                    
+
                     quick_menu.addAction(action)
 
-                
                 quick_menu.aboutToHide.connect(lambda: show_status_message("", 1))
-            
+
             self.menu.addSeparator()
-            
-            reload_action = QAction(f"🔄 {tr('reload_scripts')}", self.iface.mainWindow())
+
+            reload_action = QAction(self._icon('/mActionRefresh.svg', QStyle.SP_BrowserReload),
+                                    tr('reload_scripts'), self.iface.mainWindow())
             reload_action.setToolTip(tr('tooltip_reload'))
             reload_action.triggered.connect(self.reload_scripts)
             self.menu.addAction(reload_action)
 
-            
-            open_folder_action = QAction(f"📁 {tr('open_scripts_folder')}", self.iface.mainWindow())
+            open_folder_action = QAction(self._icon('/mActionFileOpen.svg', QStyle.SP_DirOpenIcon),
+                                         tr('open_scripts_folder'), self.iface.mainWindow())
             open_folder_action.setToolTip(tr('tooltip_folder'))
             open_folder_action.triggered.connect(self.open_scripts_folder)
             self.menu.addAction(open_folder_action)
 
-            
-            info_action = QAction(f"ℹ️ {tr('about')}", self.iface.mainWindow())
+            info_action = QAction(self._icon('/mActionHelpContents.svg', QStyle.SP_MessageBoxInformation),
+                                  tr('about'), self.iface.mainWindow())
             info_action.setToolTip(tr('tooltip_about'))
             info_action.triggered.connect(self.show_info)
             self.menu.addAction(info_action)
@@ -1059,7 +1072,7 @@ if __name__ == "__main__":
     def open_script_browser(self):
         try:
             if not self.scripts:
-                show_status_message(f"⚠️ {tr('no_scripts_warning')}", 3000, True)
+                show_status_message(tr('no_scripts_warning'), 3000, True)
                 return
             
             if self.browser_dialog:
@@ -1072,7 +1085,7 @@ if __name__ == "__main__":
             )
             self.browser_dialog.show()
             
-            show_status_message(f"📚 {tr('browser_opened')} {len(self.scripts)} scripts", 2000)
+            show_status_message(f"{tr('browser_opened')} {len(self.scripts)} scripts", 2000)
             
         except Exception as e:
             QgsMessageLog.logMessage(f"Error opening script browser: {str(e)}", 
@@ -1131,13 +1144,13 @@ if __name__ == "__main__":
                 
                 script_name = os.path.basename(script_path)
                 if not capture_output:
-                    show_status_message(f"✅ {tr('script_executed').replace('!', '')} '{script_name}'!", 3000)
-                    
-                QgsMessageLog.logMessage(f"✅ Script executed successfully: {script_name}", 
+                    show_status_message(f"{tr('script_executed').replace('!', '')} '{script_name}'!", 3000)
+
+                QgsMessageLog.logMessage(f"Script executed successfully: {script_name}",
                                        "Script Manager", Qgis.Success)
-                
+
                 if captured_output.strip():
-                    QgsMessageLog.logMessage(f"📤 {tr('output_captured')}:\n{captured_output}", 
+                    QgsMessageLog.logMessage(f"{tr('output_captured')}:\n{captured_output}",
                                            "Script Manager", Qgis.Info)
             
             finally:
@@ -1145,13 +1158,13 @@ if __name__ == "__main__":
         
         except Exception as e:
             script_name = os.path.basename(script_path)
-            error_msg = f"❌ {tr('error_executing')} {script_name}: {str(e)}"
+            error_msg = f"{tr('error_executing')} {script_name}: {str(e)}"
             detailed_error = f"{error_msg}\n\nDetails:\n{traceback.format_exc()}"
             
             captured_errors = detailed_error
             
             if not capture_output:
-                show_status_message(f"❌ {tr('error')} '{script_name}'", 5000, True)
+                show_status_message(f"{tr('error')} '{script_name}'", 5000, True)
                 QMessageBox.critical(None, tr('script_error'), 
                                    f"{tr('error_executing')} '{script_name}':\n\n{str(e)}\n\n{tr('check_log')}")
             
@@ -1170,8 +1183,8 @@ if __name__ == "__main__":
             self.load_scripts()
             self.create_menu()
             self._populate_toolbar()
-            show_status_message(f"🔄 {tr('scripts_reloaded')} ({len(self.scripts)} scripts)", 2000)
-            QgsMessageLog.logMessage("🔄 Scripts reloaded successfully", "Script Manager", Qgis.Info)
+            show_status_message(f"{tr('scripts_reloaded')} ({len(self.scripts)} scripts)", 2000)
+            QgsMessageLog.logMessage("Scripts reloaded successfully", "Script Manager", Qgis.Info)
         except Exception as e:
             QgsMessageLog.logMessage(f"Error updating menu: {str(e)}", 
                                    "Script Manager", Qgis.Critical)
